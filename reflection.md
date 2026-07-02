@@ -69,6 +69,9 @@ For a personal pet-care planner, "do the most important things first" is exactly
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
+
+**Confidence level: 4 / 5.** The core behaviors — sorting by priority, time-boxing tasks into the day window, recurring-task requeueing, and conflict detection — are all covered by passing tests, so I'm confident the common paths work as intended. I held back from a 5 because a few edge cases aren't yet tested (see below).
+
 - What edge cases would you test next if you had more time?
 
 ---
