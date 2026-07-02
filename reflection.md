@@ -36,7 +36,12 @@ I also changed `Task.recurring` (a bool) to `frequency` ("once" / "daily" / "wee
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
+
+My scheduler uses a **greedy algorithm**: it sorts tasks by priority (then by shorter duration to break ties) and packs them into the day back-to-back until the time budget runs out. This means it does *not* guarantee the "best" possible plan. Because it commits to high-priority tasks first, a single long high-priority task can crowd out several shorter tasks that together would have been more valuable. For example, in an hour a 45-minute high-priority grooming will block a 20-minute and a 30-minute task that could otherwise both fit. A true optimal solution would be a knapsack-style search that tries combinations to maximize total value.
+
 - Why is that tradeoff reasonable for this scenario?
+
+For a personal pet-care planner, "do the most important things first" is exactly the behavior a user expects and can understand — if grooming is high priority, they *want* it scheduled even if it displaces smaller tasks. The greedy approach is also O(n log n) (dominated by the sort), simple to implement, and easy to explain, which matters because the app's job includes explaining *why* each task was chosen. An optimal knapsack solver would be slower, much harder to reason about, and its "smarter" choices could feel arbitrary to the user (skipping a high-priority task to fit two low-priority ones). Predictable and explainable beats mathematically optimal for this use case.
 
 ---
 

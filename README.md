@@ -53,7 +53,13 @@ Paste a sample of your app's CLI or Streamlit output here so a reader can see wh
 #   09:00 — Feeding (10 min) [priority: high]
 #   ...
 ```
-
+==== Today's Schedule for Jordan =====
+Daily plan (120 min available):
+  08:00 — Feeding (10 min) [priority: high] for Mochi
+  08:10 — Morning walk (30 min) [priority: high] for Biscuit
+  08:40 — Litter change (15 min) [priority: medium] for Mochi
+  08:55 — Enrichment play (20 min) [priority: medium] for Biscuit
+  09:15 — Grooming (45 min) [priority: low] for Biscuit
 ## 🧪 Testing PawPal+
 
 ```bash
@@ -72,14 +78,17 @@ Sample test output:
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
+All scheduling logic lives in `pawpal_system.py`. Times are stored as
+minutes-since-midnight ints (e.g. `08:00` → `480`) to keep the math simple.
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Task.score()`, `Scheduler.sort_tasks()` | Each task's `score()` weights priority (low/medium/high) far above duration, so priority dominates and a shorter task breaks ties. `sort_tasks()` orders candidates by that score, highest first. |
+| Filtering by pet / status | `Scheduler.filter_tasks(done, pet_name)` | Optional, combinable filters. `done=True/False` keeps completed/incomplete tasks (`None` keeps both); `pet_name` matches a pet case-insensitively. |
+| Time-boxing (fit to the day) | `Scheduler.filter_by_time()`, `Scheduler.build_plan()` | Greedily packs sorted tasks back-to-back from `day_start`; tasks that overflow the window are skipped with a recorded reason. |
+| Conflict detection | `Scheduler.detect_conflicts()`, `Scheduler.conflict_warning()` | `detect_conflicts()` returns pairs of tasks whose half-open `[start, end)` time slots overlap (across any pets). `conflict_warning()` wraps it in a friendly message and never raises — returns `""` when clear. |
+| Recurring tasks | `Task.is_recurring()`, `Task.next_occurrence()`, `Task.mark_done()` | Completing a `daily`/`weekly` task auto-creates the next occurrence with its `due_date` advanced via `datetime.timedelta` (handles month/year rollover); one-off tasks spawn nothing. |
+| Explanation | `Scheduler.explain()` | Renders the timed plan plus a "Skipped" section, so the user can see what was chosen, when, and why. |
 
 ## 📸 Demo Walkthrough
 

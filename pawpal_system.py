@@ -12,10 +12,17 @@ scheduling math simple and avoid datetime edge cases for now.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 
 # Higher weight = more important. Used by Task.score() for ordering.
 PRIORITY_WEIGHTS = {"low": 1, "medium": 2, "high": 3}
+
+# How far ahead each recurring frequency schedules its next occurrence.
+FREQUENCY_STEP = {
+    "daily": timedelta(days=1),
+    "weekly": timedelta(weeks=1),
+}
 
 
 def _format_time(minute: int) -> str:
@@ -33,6 +40,11 @@ class Task:
     priority: str = "medium"  # "low" | "medium" | "high"
     frequency: str = "once"  # "once" | "daily" | "weekly"
     done: bool = False
+    due_date: date = field(default_factory=date.today)
+    # Back-reference to the owning pet, set by Pet.add_task. Excluded from repr
+    # and equality to avoid recursion (Pet holds Tasks) and keep Tasks comparable
+    # by their care details.
+    pet: "Pet | None" = field(default=None, repr=False, compare=False)
 
     def score(self) -> float:
         """Rank value for ordering: priority dominates, shorter tasks break ties."""
@@ -43,9 +55,26 @@ class Task:
         """Whether this task repeats (frequency != 'once')."""
         return self.frequency != "once"
 
+    def next_occurrence(self) -> "Task | None":
+        """Build the next instance of a recurring task.
+
+        Copies this task with done reset to False and the due_date advanced by
+        one interval (FREQUENCY_STEP maps daily -> +1 day, weekly -> +1 week).
+        timedelta handles month/year rollover, so month-end dates stay valid.
+
+        Returns:
+            A new, not-done Task for the next occurrence, or None if this task
+            is one-off (frequency == 'once') and therefore does not repeat.
+        """
+        if not self.is_recurring():
+            return None
+        return replace(self, done=False, due_date=self.due_date + FREQUENCY_STEP[self.frequency])
+
     def mark_done(self) -> None:
-        """Mark this task as completed."""
+        """Mark done; if recurring, queue the next occurrence on the same pet."""
         self.done = True
+        if self.is_recurring() and self.pet is not None:
+            self.pet.add_task(self.next_occurrence())
 
 
 @dataclass
@@ -60,12 +89,14 @@ class Pet:
     def add_task(self, task: Task) -> None:
         """Attach a care task to this pet (ignores duplicates)."""
         if task not in self.tasks:
+            task.pet = self  # back-reference so the task can requeue itself
             self.tasks.append(task)
 
     def remove_task(self, task: Task) -> None:
         """Detach a care task from this pet (no-op if absent)."""
         if task in self.tasks:
             self.tasks.remove(task)
+            task.pet = None
 
     def get_tasks(self) -> list[Task]:
         """Return a copy of this pet's tasks (callers can't mutate our list)."""
@@ -123,6 +154,13 @@ class ScheduledTask:
     task: Task
     start_minute: int | None = None
 
+    @property
+    def end_minute(self) -> int | None:
+        """When this task finishes, or None if it isn't scheduled yet."""
+        if self.start_minute is None:
+            return None
+        return self.start_minute + self.task.duration_minutes
+
 
 @dataclass
 class PlanDecision:
@@ -154,32 +192,58 @@ class Scheduler:
         self.plan = [item for item in ordered if item.start_minute is not None]
         return self.plan
 
+    def filter_tasks(
+        self, done: bool | None = None, pet_name: str | None = None
+    ) -> list[ScheduledTask]:
+        """Query tasks across every pet, applying any provided filters.
+
+        Starts from all of the owner's tasks and narrows the list. Each filter
+        is optional and they combine (logical AND); None means "ignore this
+        filter", which is why `done` uses None rather than defaulting to False.
+
+        Args:
+            done: Keep only completed (True) or incomplete (False) tasks;
+                None keeps both.
+            pet_name: Keep only tasks for the pet with this name
+                (case-insensitive); None keeps all pets.
+
+        Returns:
+            Matching tasks as ScheduledTask candidates, each retaining its pet
+            reference.
+        """
+        items = self.owner.all_tasks()
+        if done is not None:
+            items = [it for it in items if it.task.done == done]
+        if pet_name is not None:
+            items = [it for it in items if it.pet.name.lower() == pet_name.lower()]
+        return items
+
     def sort_tasks(self, items: list[ScheduledTask]) -> list[ScheduledTask]:
         """Order candidates by task.score() (priority first, then shorter)."""
         return sorted(items, key=lambda item: item.task.score(), reverse=True)
 
     def filter_by_time(self, items: list[ScheduledTask]) -> list[PlanDecision]:
-        """Greedily fit items into the budget; record a keep/drop reason for each."""
+        """Greedily fit items into the day window; record a keep/drop reason for each.
+
+        A single `cursor` tracks where the next task goes; it doubles as the
+        running total of time used (cursor - day_start).
+        """
         decisions: list[PlanDecision] = []
-        budget = self.owner.available_minutes()
-        used = 0
         cursor = self.owner.day_start
 
         for item in items:
             duration = item.task.duration_minutes
-            if used + duration <= budget:
+            if cursor + duration <= self.owner.day_end:
                 item.start_minute = cursor
                 cursor += duration
-                used += duration
                 reason = (
                     f"scheduled at {_format_time(item.start_minute)} "
                     f"({duration} min, {item.task.priority} priority)"
                 )
                 decisions.append(PlanDecision(item.pet, item.task, True, reason))
             else:
-                reason = (
-                    f"skipped — {budget - used} min left, needs {duration}"
-                )
+                remaining = self.owner.day_end - cursor
+                reason = f"skipped — {remaining} min left, needs {duration}"
                 decisions.append(PlanDecision(item.pet, item.task, False, reason))
 
         return decisions
@@ -207,4 +271,58 @@ class Scheduler:
                     f"  {decision.task.title} ({decision.pet.name}) — {decision.reason}"
                 )
 
+        return "\n".join(lines)
+
+    def detect_conflicts(
+        self, items: list[ScheduledTask] | None = None
+    ) -> list[tuple[ScheduledTask, ScheduledTask]]:
+        """Return pairs of scheduled tasks whose time slots overlap.
+
+        Two tasks overlap when one starts before the other ends (half-open
+        intervals, so back-to-back tasks that merely touch do NOT conflict).
+        Works across pets; check each pair's .pet to tell same-pet from cross-pet.
+        Defaults to self.plan.
+        """
+        pool = self.plan if items is None else items
+        scheduled = sorted(
+            (it for it in pool if it.start_minute is not None),
+            key=lambda it: it.start_minute,
+        )
+
+        conflicts: list[tuple[ScheduledTask, ScheduledTask]] = []
+        for i, earlier in enumerate(scheduled):
+            for later in scheduled[i + 1:]:
+                if later.start_minute >= earlier.end_minute:
+                    break  # sorted by start, so nothing further can overlap
+                conflicts.append((earlier, later))
+        return conflicts
+
+    def conflict_warning(self, items: list[ScheduledTask] | None = None) -> str:
+        """Summarize any scheduling overlaps as a warning message.
+
+        A lightweight, non-crashing wrapper around detect_conflicts: it never
+        raises, so callers can guard with a plain `if warning:` instead of
+        try/except. Each line names both tasks, their time ranges, the pet(s),
+        and whether the clash is same-pet or cross-pet.
+
+        Args:
+            items: Scheduled tasks to check; defaults to self.plan.
+
+        Returns:
+            A multi-line warning string when overlaps exist, or an empty string
+            (falsy) when the schedule is clear.
+        """
+        conflicts = self.detect_conflicts(items)
+        if not conflicts:
+            return ""
+
+        lines = [f"⚠️  {len(conflicts)} scheduling conflict(s) detected:"]
+        for earlier, later in conflicts:
+            scope = "same pet" if earlier.pet is later.pet else "different pets"
+            lines.append(
+                f"  {earlier.task.title} ({_format_time(earlier.start_minute)}"
+                f"–{_format_time(earlier.end_minute)}, {earlier.pet.name}) overlaps "
+                f"{later.task.title} ({_format_time(later.start_minute)}"
+                f"–{_format_time(later.end_minute)}, {later.pet.name}) [{scope}]"
+            )
         return "\n".join(lines)
