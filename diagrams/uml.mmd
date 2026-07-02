@@ -1,22 +1,26 @@
 classDiagram
     %% PawPal+ — daily pet care planning assistant
+    %% Times are stored as minutes-since-midnight ints (e.g. 8:00 -> 480) to keep math simple.
     %% Keep this file updated so it matches your final implementation.
 
     class Owner {
         +str name
+        +int day_start
+        +int day_end
         +list~Pet~ pets
-        +int available_minutes
         +dict preferences
         +add_pet(pet) void
         +set_availability(start, end) void
+        +available_minutes() int
         +list_pets() list~Pet~
+        +all_tasks() list~ScheduledTask~
     }
 
     class Pet {
         +str name
         +str species
-        +list~Task~ tasks
         +str notes
+        +list~Task~ tasks
         +add_task(task) void
         +remove_task(task) void
         +get_tasks() list~Task~
@@ -26,24 +30,41 @@ classDiagram
         +str title
         +int duration_minutes
         +str priority
-        +bool recurring
+        +str frequency
         +bool done
         +score() float
         +is_recurring() bool
         +mark_done() void
     }
 
+    class ScheduledTask {
+        +Pet pet
+        +Task task
+        +int start_minute
+    }
+
+    class PlanDecision {
+        +Pet pet
+        +Task task
+        +bool included
+        +str reason
+    }
+
     class Scheduler {
         +Owner owner
-        +int time_budget
-        +list~Task~ plan
-        +build_plan() list~Task~
-        +sort_tasks(tasks) list~Task~
-        +filter_by_time(tasks) list~Task~
+        +list~ScheduledTask~ plan
+        +list~PlanDecision~ decisions
+        +build_plan() list~ScheduledTask~
+        +sort_tasks(items) list~ScheduledTask~
+        +filter_by_time(items) list~PlanDecision~
         +explain() str
     }
 
     Owner "1" --> "*" Pet : owns
     Pet "1" --> "*" Task : has
-    Scheduler --> Owner : plans for
-    Scheduler ..> Task : produces plan of
+    Scheduler "1" --> "1" Owner : plans for
+    ScheduledTask --> Pet : belongs to
+    ScheduledTask --> Task : wraps
+    PlanDecision --> Task : records
+    Scheduler "1" --> "*" ScheduledTask : produces
+    Scheduler "1" --> "*" PlanDecision : records
