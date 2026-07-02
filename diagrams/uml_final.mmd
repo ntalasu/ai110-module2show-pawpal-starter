@@ -1,0 +1,80 @@
+classDiagram
+    %% PawPal+ — daily pet care planning assistant (FINAL, matches pawpal_system.py)
+    %% Times are stored as minutes-since-midnight ints (e.g. 8:00 -> 480) to keep math simple.
+    %% Module-level constants (not classes): PRIORITY_WEIGHTS {low:1, medium:2, high:3},
+    %% FREQUENCY_STEP {daily:+1 day, weekly:+1 week}.
+
+    class Owner {
+        +str name
+        +int day_start
+        +int day_end
+        +list~Pet~ pets
+        +dict preferences
+        +add_pet(pet) void
+        +set_availability(start, end) void
+        +available_minutes() int
+        +list_pets() list~Pet~
+        +all_tasks() list~ScheduledTask~
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str notes
+        +list~Task~ tasks
+        +add_task(task) void
+        +remove_task(task) void
+        +get_tasks() list~Task~
+    }
+
+    class Task {
+        +str title
+        +int duration_minutes
+        +str priority
+        +str frequency
+        +bool done
+        +date due_date
+        +Pet pet
+        +score() float
+        +is_recurring() bool
+        +next_occurrence() Task
+        +mark_done() void
+    }
+
+    class ScheduledTask {
+        +Pet pet
+        +Task task
+        +int start_minute
+        +end_minute() int
+    }
+
+    class PlanDecision {
+        +Pet pet
+        +Task task
+        +bool included
+        +str reason
+    }
+
+    class Scheduler {
+        +Owner owner
+        +list~ScheduledTask~ plan
+        +list~PlanDecision~ decisions
+        +build_plan() list~ScheduledTask~
+        +filter_tasks(done, pet_name) list~ScheduledTask~
+        +sort_tasks(items) list~ScheduledTask~
+        +filter_by_time(items) list~PlanDecision~
+        +explain() str
+        +detect_conflicts(items) list~tuple~
+        +conflict_warning(items) str
+    }
+
+    Owner "1" --> "*" Pet : owns
+    Pet "1" --> "*" Task : has
+    Task "*" --> "0..1" Pet : back-reference (requeues recurring)
+    Scheduler "1" --> "1" Owner : plans for
+    ScheduledTask --> Pet : belongs to
+    ScheduledTask --> Task : wraps
+    PlanDecision --> Pet : records
+    PlanDecision --> Task : records
+    Scheduler "1" --> "*" ScheduledTask : produces
+    Scheduler "1" --> "*" PlanDecision : records
